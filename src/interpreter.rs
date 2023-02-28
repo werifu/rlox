@@ -1,30 +1,115 @@
 use crate::{
+    environment::Environment,
     error::RuntimeError,
-    expression::{BinaryExpr, Expr, LiteralExpr, LiteralValue, UnaryExpr},
-    lox::Lox,
+    expression::{self, BinaryExpr, Expr, LiteralExpr, LiteralValue, UnaryExpr},
     parser::Parser,
     scanner::Scanner,
+    statement::Stmt,
     token::TokenType,
 };
 
-pub struct Interpreter {}
+pub struct Interpreter<W> {
+    environment: Environment,
+    output: W,
+}
 
-impl Interpreter {
-    pub fn new() -> Self {
-        Self {}
+impl<W: std::io::Write> Interpreter<W> {
+    pub fn new(output: W) -> Self {
+        Self {
+            environment: Environment::new(),
+            output,
+        }
     }
-    pub fn evaluate(&self, expr: &Expr) -> Result<Option<LiteralValue>, RuntimeError> {
+
+    /// Interpret a program (contains multiple statements)
+    pub fn interpret(&self, stmts: &Vec<Stmt>) -> Result<(), RuntimeError> {
+        Ok(())
+    }
+
+    pub fn evaluate(&mut self, expr: &Expr) -> Result<Option<LiteralValue>, RuntimeError> {
         match expr {
             Expr::Binary(binary) => self.evaluate_binary(binary).map(|value| Some(value)),
             Expr::Unary(unary) => self.evaluate_unary(unary).map(|value| Some(value)),
             Expr::Grouping(grouping) => self.evaluate(&grouping.expression),
             Expr::Literal(literal) => Ok(Some(literal.get_literal_value())),
+            Expr::Variable(var) => {
+                // TODO: optimization needed here
+                let v = self.environment.get(&var.var.lexeme)?;
+                Ok(Some(v.clone()))
+            }
+            Expr::Assign(assign) => {
+                let value = self.evaluate(&assign.value)?;
+                match value {
+                    Some(value) => {
+                        self.environment
+                            .assign(assign.lvar.clone(), value.clone())?;
+                        Ok(Some(value))
+                    }
+                    None => Err(RuntimeError::new(format!(
+                        "Expression `{}` has no value.",
+                        assign.value.to_string()
+                    ))),
+                }
+            }
+        }
+    }
+
+    pub fn execute(&mut self, stmt: &Stmt) -> Result<(), RuntimeError> {
+        match stmt {
+            Stmt::Print(stmt) => {
+                let value = self.evaluate(&stmt.expr)?;
+                match value {
+                    None => Err(RuntimeError::new(format!(
+                        "Expression {} has no value and cannot be printed!",
+                        stmt.expr.to_string()
+                    ))),
+                    Some(v) => {
+                        writeln!(self.output, "{}", format!("{}", v)).unwrap();
+                        Ok(())
+                    }
+                }
+            }
+            Stmt::Expr(stmt) => {
+                self.evaluate(&stmt.expr)?;
+                Ok(())
+            }
+            Stmt::Var(var_stmt) => {
+                if let Some(init_v) = &var_stmt.initializer {
+                    if let Some(lit_v) = self.evaluate(init_v)? {
+                        self.environment.define(var_stmt.var_name.as_str(), lit_v);
+                        Ok(())
+                    } else {
+                        // no value
+                        return Err(RuntimeError::new(format!(
+                            "Expression `{}` has no value.",
+                            init_v.to_string()
+                        )));
+                    }
+                } else {
+                    // no initializer
+                    self.environment
+                        .define(var_stmt.var_name.as_str(), LiteralValue::Nil);
+                    Ok(())
+                }
+            }
+            Stmt::Block(block) => {
+                self.environment.create_scope();
+
+                let stmts = &block.stmts;
+                for stmt in stmts {
+                    // recover from current environment
+                    self.execute(stmt)?;
+                }
+
+                self.environment.drop_scope();
+                Ok(())
+            }
         }
     }
 }
 
-impl Interpreter {
-    fn evaluate_unary(&self, expr: &UnaryExpr) -> Result<LiteralValue, RuntimeError> {
+impl<W: std::io::Write> Interpreter<W> {
+    fn evaluate_unary(&mut self, expr: &UnaryExpr) -> Result<LiteralValue, RuntimeError> {
         if let Some(right) = self.evaluate(&expr.expression)? {
             match expr.operator.r#type {
                 TokenType::Minus => {
@@ -54,7 +139,7 @@ impl Interpreter {
         }
     }
 
-    fn evaluate_binary(&self, expr: &BinaryExpr) -> Result<LiteralValue, RuntimeError> {
+    fn evaluate_binary(&mut self, expr: &BinaryExpr) -> Result<LiteralValue, RuntimeError> {
         let left = self.evaluate(&expr.left)?;
         let right = self.evaluate(&expr.right)?;
         let op_type = expr.operator.r#type;
@@ -123,7 +208,7 @@ impl Interpreter {
 }
 
 /// util methods
-impl Interpreter {
+impl<W> Interpreter<W> {
     fn is_truthy(&self, expr: &LiteralValue) -> bool {
         match expr {
             LiteralValue::Num(num) if *num == 0.0 => false,
@@ -150,8 +235,8 @@ fn test_evaluate_unary() {
         let mut scanner = Scanner::new(String::from(input));
         let tokens = scanner.scan_tokens();
         let mut parser = Parser::new(tokens);
-        let expr = parser.parse().unwrap();
-        let interpreter = Interpreter {};
+        let expr = parser.parse_expression().unwrap();
+        let mut interpreter = Interpreter::new(std::io::stdout());
         assert_eq!(should_be, interpreter.evaluate(&expr).unwrap().unwrap());
     }
 }
@@ -180,8 +265,8 @@ fn test_evaluate_binary() {
         let mut scanner = Scanner::new(String::from(input));
         let tokens = scanner.scan_tokens();
         let mut parser = Parser::new(tokens);
-        let expr = parser.parse().unwrap();
-        let interpreter = Interpreter {};
+        let expr = parser.parse_expression().unwrap();
+        let mut interpreter = Interpreter::new(std::io::stdout());
         assert_eq!(should_be, interpreter.evaluate(&expr).unwrap().unwrap());
     }
 }

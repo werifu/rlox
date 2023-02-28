@@ -1,6 +1,6 @@
 #[derive(Debug)]
 pub enum LoxError {
-    TokenError(),
+    // TokenError(),
     ParseError(ParseError),
     RuntimeError(RuntimeError),
 }
@@ -32,5 +32,14 @@ impl RuntimeError {
 
     pub fn new(msg: String) -> Self {
         Self { message: msg }
+    }
+}
+
+impl LoxError {
+    pub fn report(&self) {
+        match self {
+            LoxError::ParseError(err) => err.report(),
+            LoxError::RuntimeError(err) => err.report(),
+        }
     }
 }

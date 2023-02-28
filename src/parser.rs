@@ -1,4 +1,16 @@
-// expression     → equality ;
+// program        → declaration * EOF ;
+// declaration    → varDecl
+//                | statement ;
+// varDecl        → "var" IDENTIFIER ( "=" expression )? ";" ;
+// statement      → exprStmt
+//                | printStmt
+//                | block;
+// block          → "{" declaration* "}" ;
+// exprStmt       → expression ";" ;
+// printStmt      → "print" expression ";" ;
+// expression     → assignment ;
+// assignment     → IDENTIFIRE "=" assignment
+//                | equality;
 // equality       → comparison ( ( "!=" | "==" ) comparison )* ;
 // comparison     → term ( ( ">" | ">=" | "<" | "<=" ) term )* ;
 // term           → factor ( ( "-" | "+" ) factor )* ;
@@ -6,11 +18,15 @@
 // unary          → ( "!" | "-" ) unary
 //                | primary ;
 // primary        → NUMBER | STRING | "true" | "false" | "nil"
-//                | "(" expression ")" ;
+//                | "(" expression ")"
+//                | IDENTIFIER ;
 
 use crate::{
     error::ParseError,
-    expression::{BinaryExpr, Expr, GroupingExpr, LiteralExpr, UnaryExpr},
+    expression::{
+        AssignExpr, BinaryExpr, Expr, GroupingExpr, LiteralExpr, UnaryExpr, VariableExpr,
+    },
+    statement::{Block, ExprStmt, PrintStmt, Stmt, VarDecStmt},
     token::Token,
     token::TokenType,
 };
@@ -25,22 +41,119 @@ impl Parser {
         Self { tokens, current: 0 }
     }
 
-    pub fn parse(&mut self) -> Result<Expr, ParseError> {
-        self.expression()
+    pub fn parse(&mut self) -> Result<Vec<Stmt>, ParseError> {
+        let mut statements = vec![];
+        while !self.is_at_end() {
+            // TODO: engage all the parse errors
+            match self.declaration() {
+                Ok(statement) => statements.push(statement),
+                Err(_) => self.synchronize(),
+            }
+        }
+        Ok(statements)
     }
 
     pub fn all_parsed(&self) -> bool {
-        println!("!!{}", self.current);
         self.current == self.tokens.len() - 1
+    }
+
+    // Make test easier
+    pub fn parse_expression(&mut self) -> Result<Expr, ParseError> {
+        self.expression()
     }
 }
 
 impl Parser {
-    /// expression     → equality ;
-    fn expression(&mut self) -> Result<Expr, ParseError> {
-        self.equality()
+    // block          → "{" declaration* "}" ;
+    fn block(&mut self) -> Result<Stmt, ParseError> {
+        let mut stmts = vec![];
+        // not } or end meaning still in the block
+        while !self.check(TokenType::RightBrace) && !self.is_at_end() {
+            stmts.push(self.declaration()?);
+        }
+        self.consume(TokenType::RightBrace);
+
+        Ok(Stmt::Block(Block::new(stmts)))
     }
 
+    // declaration    → varDecl
+    //                | statement ;
+    fn declaration(&mut self) -> Result<Stmt, ParseError> {
+        if self.token_type_match(&vec![TokenType::Var]) {
+            self.var_declaration()
+        } else {
+            self.statement()
+        }
+    }
+
+    // varDecl        → "var" IDENTIFIER ( "=" expression )? ";" ;
+    fn var_declaration(&mut self) -> Result<Stmt, ParseError> {
+        let var_name = self.consume(TokenType::Identifier)?.lexeme.clone();
+        let mut expr: Option<Expr> = None;
+        if self.token_type_match(&vec![TokenType::Equal]) {
+            expr = Some(self.expression()?);
+            self.consume(TokenType::Semicolon)?;
+        }
+        Ok(Stmt::Var(VarDecStmt::new(var_name, expr)))
+    }
+
+    /// statement      → exprStmt
+    ///                | printStmt
+    ///                | block ;
+    fn statement(&mut self) -> Result<Stmt, ParseError> {
+        if self.token_type_match(&vec![TokenType::Print]) {
+            self.print_stmt()
+        } else if self.token_type_match(&vec![TokenType::LeftBrace]) {
+            self.block()
+        } else {
+            self.expr_stmt()
+        }
+    }
+
+    /// printStmt      → "print" expression ";" ;
+    fn print_stmt(&mut self) -> Result<Stmt, ParseError> {
+        let stmt = self
+            .expression()
+            .map(|expr| Stmt::Print(PrintStmt::new(expr)))?;
+        self.consume(TokenType::Semicolon)?;
+        Ok(stmt)
+    }
+
+    /// exprStmt       → expression ";" ;
+    fn expr_stmt(&mut self) -> Result<Stmt, ParseError> {
+        let stmt = self
+            .expression()
+            .map(|expr| Stmt::Expr(ExprStmt::new(expr)))?;
+        self.consume(TokenType::Semicolon)?;
+        Ok(stmt)
+    }
+
+    /// expression     → equality ;
+    fn expression(&mut self) -> Result<Expr, ParseError> {
+        self.assignment()
+    }
+
+    fn assignment(&mut self) -> Result<Expr, ParseError> {
+        let expr = self.equality()?;
+        // assignment statement
+        if self.token_type_match(&vec![TokenType::Equal]) {
+            let equals = self.previous().to_owned();
+            let value = self.assignment()?;
+            if let Expr::Variable(var_expr) = expr {
+                let token = var_expr.var;
+                return Ok(Expr::Assign(AssignExpr {
+                    lvar: token,
+                    value: Box::new(value),
+                }));
+            }
+            // TODO: more detail error
+            return Err(ParseError::new(format!(
+                "Invalid assignment target `{:?}`.",
+                equals
+            )));
+        }
+        Ok(expr)
+    }
     /// equality       → comparison ( ( "!=" | "==" ) comparison )* ;
     fn equality(&mut self) -> Result<Expr, ParseError> {
         let mut expr = self.comparison()?;
@@ -131,6 +244,7 @@ impl Parser {
 
     // primary        → NUMBER | STRING | "true" | "false" | "nil"
     //                | "(" expression ")" ;
+    //                | IDENTIFIER
     fn primary(&mut self) -> Result<Expr, ParseError> {
         let lit_types = vec![
             TokenType::False,
@@ -149,6 +263,10 @@ impl Parser {
             self.consume(TokenType::RightParen).unwrap();
             Ok(Expr::Grouping(GroupingExpr {
                 expression: Box::new(expr),
+            }))
+        } else if self.token_type_match(&vec![TokenType::Identifier]) {
+            Ok(Expr::Variable(VariableExpr {
+                var: self.previous().clone(),
             }))
         } else {
             unreachable!()

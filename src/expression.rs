@@ -5,6 +5,18 @@ pub enum Expr {
     Unary(UnaryExpr),
     Grouping(GroupingExpr),
     Literal(LiteralExpr),
+    Variable(VariableExpr),
+    Assign(AssignExpr),
+}
+
+pub struct AssignExpr {
+    /// left value token
+    pub lvar: Token,
+    /// right value expression
+    pub value: Box<Expr>,
+}
+pub struct VariableExpr {
+    pub var: Token,
 }
 
 pub struct BinaryExpr {
@@ -45,12 +57,25 @@ impl LiteralExpr {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum LiteralValue {
     Num(f64),
     Str(String),
     Bool(bool),
+    Nil,
 }
+
+impl std::fmt::Display for LiteralValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LiteralValue::Num(num) => write!(f, "{}", num),
+            LiteralValue::Str(str) => write!(f, "{}", str),
+            LiteralValue::Bool(b) => write!(f, "{}", b),
+            LiteralValue::Nil => write!(f, "nil"),
+        }
+    }
+}
+
 impl ToString for Expr {
     fn to_string(&self) -> String {
         match self {
@@ -58,6 +83,8 @@ impl ToString for Expr {
             Expr::Unary(unary) => unary.to_string(),
             Expr::Grouping(grouping) => grouping.to_string(),
             Expr::Literal(literal) => literal.to_string(),
+            Expr::Variable(var) => var.to_string(),
+            Expr::Assign(assign) => assign.to_string(),
         }
     }
 }
@@ -92,6 +119,17 @@ impl ToString for GroupingExpr {
 impl ToString for LiteralExpr {
     fn to_string(&self) -> String {
         self.token.lexeme.clone()
+    }
+}
+
+impl ToString for VariableExpr {
+    fn to_string(&self) -> String {
+        self.var.lexeme.clone()
+    }
+}
+impl ToString for AssignExpr {
+    fn to_string(&self) -> String {
+        format!("{} = {}", self.lvar.lexeme.clone(), self.value.to_string())
     }
 }
 #[test]
@@ -130,4 +168,9 @@ fn expression_to_string() {
         right: Box::new(unary),
     });
     assert_eq!(complicated.to_string(), "(+ (+ 114 514) (+ 514))")
+}
+
+pub enum Value {
+    Literal(LiteralValue),
+    Variable(),
 }
